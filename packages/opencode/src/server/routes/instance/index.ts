@@ -26,8 +26,10 @@ import { ExperimentalRoutes } from "./experimental"
 import { ProviderRoutes } from "./provider"
 import { EventRoutes } from "./event"
 import { SyncRoutes } from "./sync"
+import { V1Routes } from "./v1"
 import { InstanceMiddleware } from "./middleware"
 import { jsonRequest } from "./trace"
+import { Schema } from "effect"
 
 export const InstanceRoutes = (upgrade: UpgradeWebSocket): Hono => {
   const app = new Hono()
@@ -60,6 +62,7 @@ export const InstanceRoutes = (upgrade: UpgradeWebSocket): Hono => {
     .route("/question", QuestionRoutes())
     .route("/provider", ProviderRoutes())
     .route("/sync", SyncRoutes())
+    .route("/v1", V1Routes())
     .route("/", FileRoutes())
     .route("/", EventRoutes())
     .route("/mcp", McpRoutes())
@@ -260,7 +263,7 @@ export const InstanceRoutes = (upgrade: UpgradeWebSocket): Hono => {
             description: "LSP server status",
             content: {
               "application/json": {
-                schema: resolver(LSP.Status.zod.array()),
+                schema: resolver(z.array(LSP.Status.zod)),
               },
             },
           },
