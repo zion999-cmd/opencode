@@ -215,7 +215,12 @@ function anthropicToModelMessages(
         if (p.type === "text" && p.text) {
           content.push({ type: "text", text: p.text as string })
         } else if (p.type === "tool_use") {
-          content.push({ type: "tool-call", toolCallId: p.id, toolName: p.name, input: p.input ?? {} })
+          const rawInput = p.input
+          const parsedInput =
+            typeof rawInput === "string"
+              ? (() => { try { return JSON.parse(rawInput) } catch { return {} } })()
+              : (rawInput ?? {})
+          content.push({ type: "tool-call", toolCallId: p.id, toolName: p.name, input: parsedInput })
         }
       }
       if (content.length === 0) content.push({ type: "text", text: " " })
