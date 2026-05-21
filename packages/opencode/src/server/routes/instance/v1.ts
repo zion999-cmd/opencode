@@ -100,6 +100,9 @@ function toModelMessages(messages: unknown[]): ModelMessage[] {
           if (p.type === "text") content.push({ type: "text", text: p.text })
         }
       }
+      if (typeof msg.reasoning_content === "string" && msg.reasoning_content) {
+        content.push({ type: "reasoning", text: msg.reasoning_content })
+      }
       // convert OpenAI tool_calls → AI SDK ToolCallPart
       if (Array.isArray(msg.tool_calls)) {
         for (const tc of msg.tool_calls as any[]) {
@@ -224,6 +227,9 @@ function anthropicToModelMessages(
               ? (() => { try { return JSON.parse(rawInput) } catch { return {} } })()
               : (rawInput ?? {})
           content.push({ type: "tool-call", toolCallId: p.id, toolName: p.name, input: parsedInput })
+        } else if (p.type === "reasoning" || p.type === "thinking") {
+          const reasoningText = typeof p.reasoning === "string" ? p.reasoning : (typeof p.text === "string" ? p.text : "")
+          if (reasoningText) content.push({ type: "reasoning", text: reasoningText })
         }
       }
       if (content.length === 0) content.push({ type: "text", text: " " })
@@ -568,7 +574,7 @@ export const V1Routes = lazy(() =>
         log.error(`← MODEL ${modelStr} ERROR`, { error: String(err), ms: Date.now() - t0 })
         throw err
       }
-      const { text, usage, finishReason, toolCalls } = genResult
+      const { text, usage, finishReason, toolCalls, reasoningText } = genResult
       log.info(`← MODEL ${modelStr}`, {
         finish: finishReason,
         in: usage.inputTokens,
@@ -579,6 +585,7 @@ export const V1Routes = lazy(() =>
       })
 
       const message: Record<string, unknown> = { role: "assistant", content: text || null }
+      if (reasoningText) message["reasoning_content"] = reasoningText
       if (toolCalls?.length) {
         message["tool_calls"] = toolCalls.map((tc, i) => ({
           index: i,
@@ -780,6 +787,25 @@ export const V1Routes = lazy(() =>
                 await s.writeSSE({ event: "content_block_stop",
                   data: JSON.stringify({ type: "content_block_stop", index: blockIndex }) })
                 log.info(`← TOOL_CALL ${modelStr}`, { tool: event.toolName })
+              } else if (event.type === "reasoning-delta") {
+                if (textBlockOpen) {
+                  await s.writeSSE({ event: "content_block_stop",
+                    data: JSON.stringify({ type: "content_block_stop", index: blockIndex }) })
+                  textBlockOpen = false
+                }
+                blockIndex++
+                await s.writeSSE({
+                  event: "content_block_start",
+                  data: JSON.stringify({ type: "content_block_start", index: blockIndex,
+                    content_block: { type: "thinking", thinking: "" } }),
+                })
+                await s.writeSSE({
+                  event: "content_block_delta",
+                  data: JSON.stringify({ type: "content_block_delta", index: blockIndex,
+                    delta: { type: "thinking_delta", thinking: event.text } }),
+                })
+                await s.writeSSE({ event: "content_block_stop",
+                  data: JSON.stringify({ type: "content_block_stop", index: blockIndex }) })
               } else if (event.type === "error") {
                 log.error(`← MODEL ${modelStr} STREAM ERROR`, { error: String((event as any).error), ms: Date.now() - t0 })
                 await s.writeSSE({
@@ -849,7 +875,7 @@ export const V1Routes = lazy(() =>
           500,
         )
       }
-      const { text, usage, finishReason, toolCalls } = genResult
+      const { text, usage, finishReason, toolCalls, reasoningText } = genResult
       const stopReason =
         finishReason === "stop" ? "end_turn"
         : finishReason === "length" ? "max_tokens"
@@ -864,8 +890,9 @@ export const V1Routes = lazy(() =>
         ...(text ? { reply: text.slice(0, 120).replace(/\n/g, " ") } : {}),
       })
 
-      // Build content array: text block + tool_use blocks
+      // Build content array: reasoning block + text block + tool_use blocks
       const content: any[] = []
+      if (reasoningText) content.push({ type: "reasoning", reasoning: reasoningText })
       if (text) content.push({ type: "text", text })
       for (const tc of toolCalls ?? []) {
         content.push({ type: "tool_use", id: tc.toolCallId, name: tc.toolName, input: tc.input })
