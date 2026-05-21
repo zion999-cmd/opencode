@@ -7,6 +7,9 @@ import { Effect } from "effect"
 import { AppRuntime } from "@/effect/app-runtime"
 import { lazy } from "@/util/lazy"
 import { Log } from "@/util"
+import { Instance } from "@/project/instance"
+import { Flag } from "@/flag/flag"
+import { InstallationVersion } from "@/installation/version"
 
 const log = Log.create({ service: "server.v1" })
 
@@ -414,6 +417,16 @@ export const V1Routes = lazy(() =>
       const created = Math.floor(Date.now() / 1000)
 
       if (stream) {
+        const llmAbort = new AbortController()
+        const onReqAbort = () => llmAbort.abort()
+        c.req.raw.signal.addEventListener("abort", onReqAbort)
+        const opencodeHeaders = parsed.providerID.startsWith("opencode") ? {
+          "x-opencode-project": Instance.project.id,
+          "x-opencode-session": `ses_${crypto.randomUUID().replace(/-/g, "")}`,
+          "x-opencode-request": id,
+          "x-opencode-client": Flag.OPENCODE_CLIENT,
+          "User-Agent": `opencode/${InstallationVersion}`,
+        } : undefined
         const result = streamText({
           model: language as any,
           system,
@@ -423,82 +436,107 @@ export const V1Routes = lazy(() =>
           topP: top_p,
           tools: sdkTools,
           toolChoice: sdkTools ? toolChoice : undefined,
-          abortSignal: c.req.raw.signal,
+          abortSignal: llmAbort.signal,
           maxRetries: 0,
+          headers: opencodeHeaders,
         })
         return streamSSE(c, async (s) => {
-          for await (const event of result.fullStream) {
-            if (event.type === "text-delta") {
-              await s.writeSSE({
-                data: JSON.stringify({
-                  id,
-                  object: "chat.completion.chunk",
-                  created,
-                  model: modelStr,
-                  choices: [{ index: 0, delta: { content: event.text }, finish_reason: null }],
-                }),
-              })
-            } else if (event.type === "reasoning-delta") {
-              await s.writeSSE({
-                data: JSON.stringify({
-                  id,
-                  object: "chat.completion.chunk",
-                  created,
-                  model: modelStr,
-                  choices: [
-                    { index: 0, delta: { role: "assistant", reasoning_content: event.text }, finish_reason: null },
-                  ],
-                }),
-              })
-            } else if (event.type === "tool-call") {
-              log.info(`← TOOL_CALL ${modelStr}`, { tool: event.toolName, args: JSON.stringify(event.input).slice(0, 200) })
-              // emit the complete tool call as a single OpenAI-compatible chunk
-              await s.writeSSE({
-                data: JSON.stringify({
-                  id,
-                  object: "chat.completion.chunk",
-                  created,
-                  model: modelStr,
-                  choices: [{
-                    index: 0,
-                    delta: {
-                      tool_calls: [{
-                        index: 0,
-                        id: event.toolCallId,
-                        type: "function",
-                        function: {
-                          name: event.toolName,
-                          arguments: JSON.stringify(event.input),
-                        },
-                      }],
+          // Prime the stream so Bun doesn't treat it as an empty Content-Length: 0 response
+          await s.write(": ping\n\n")
+          try {
+            for await (const event of result.fullStream) {
+              if (event.type === "text-delta") {
+                await s.writeSSE({
+                  data: JSON.stringify({
+                    id,
+                    object: "chat.completion.chunk",
+                    created,
+                    model: modelStr,
+                    choices: [{ index: 0, delta: { content: event.text }, finish_reason: null }],
+                  }),
+                })
+              } else if (event.type === "reasoning-delta") {
+                await s.writeSSE({
+                  data: JSON.stringify({
+                    id,
+                    object: "chat.completion.chunk",
+                    created,
+                    model: modelStr,
+                    choices: [
+                      { index: 0, delta: { role: "assistant", reasoning_content: event.text }, finish_reason: null },
+                    ],
+                  }),
+                })
+              } else if (event.type === "tool-call") {
+                log.info(`← TOOL_CALL ${modelStr}`, { tool: event.toolName, args: JSON.stringify(event.input).slice(0, 200) })
+                // emit the complete tool call as a single OpenAI-compatible chunk
+                await s.writeSSE({
+                  data: JSON.stringify({
+                    id,
+                    object: "chat.completion.chunk",
+                    created,
+                    model: modelStr,
+                    choices: [{
+                      index: 0,
+                      delta: {
+                        tool_calls: [{
+                          index: 0,
+                          id: event.toolCallId,
+                          type: "function",
+                          function: {
+                            name: event.toolName,
+                            arguments: JSON.stringify(event.input),
+                          },
+                        }],
+                      },
+                      finish_reason: null,
+                    }],
+                  }),
+                })
+              } else if (event.type === "error") {
+                log.error(`← MODEL ${modelStr} STREAM ERROR`, { error: String((event as any).error), ms: Date.now() - t0 })
+                await s.writeSSE({
+                  data: JSON.stringify({
+                    error: { message: String((event as any).error), type: "api_error" },
+                  }),
+                })
+                await s.writeSSE({ data: "[DONE]" })
+              } else if (event.type === "finish-step") {
+                log.info(`← MODEL ${modelStr}`, {
+                  finish: event.finishReason,
+                  in: event.usage?.inputTokens ?? 0,
+                  out: event.usage?.outputTokens ?? 0,
+                  ms: Date.now() - t0,
+                })
+                await s.writeSSE({
+                  data: JSON.stringify({
+                    id,
+                    object: "chat.completion.chunk",
+                    created,
+                    model: modelStr,
+                    choices: [{ index: 0, delta: {}, finish_reason: event.finishReason === "tool-calls" ? "tool_calls" : event.finishReason }],
+                    usage: {
+                      prompt_tokens: event.usage?.inputTokens ?? 0,
+                      completion_tokens: event.usage?.outputTokens ?? 0,
+                      total_tokens: event.usage?.totalTokens ?? 0,
                     },
-                    finish_reason: null,
-                  }],
-                }),
-              })
-            } else if (event.type === "finish-step") {
-              log.info(`← MODEL ${modelStr}`, {
-                finish: event.finishReason,
-                in: event.usage?.inputTokens ?? 0,
-                out: event.usage?.outputTokens ?? 0,
-                ms: Date.now() - t0,
-              })
+                  }),
+                })
+                await s.writeSSE({ data: "[DONE]" })
+              }
+            }
+          } catch (err) {
+            log.error(`← MODEL ${modelStr} STREAM ERROR`, { error: String(err), ms: Date.now() - t0 })
+            try {
               await s.writeSSE({
                 data: JSON.stringify({
-                  id,
-                  object: "chat.completion.chunk",
-                  created,
-                  model: modelStr,
-                  choices: [{ index: 0, delta: {}, finish_reason: event.finishReason === "tool-calls" ? "tool_calls" : event.finishReason }],
-                  usage: {
-                    prompt_tokens: event.usage?.inputTokens ?? 0,
-                    completion_tokens: event.usage?.outputTokens ?? 0,
-                    total_tokens: event.usage?.totalTokens ?? 0,
-                  },
+                  error: { message: String(err), type: "api_error" },
                 }),
               })
               await s.writeSSE({ data: "[DONE]" })
-            }
+            } catch { /* stream already closed */ }
+          } finally {
+            c.req.raw.signal.removeEventListener("abort", onReqAbort)
           }
         })
       }
@@ -506,6 +544,13 @@ export const V1Routes = lazy(() =>
       // Non-streaming
       let genResult: Awaited<ReturnType<typeof generateText>>
       try {
+        const opencodeHeadersNonStream = parsed.providerID.startsWith("opencode") ? {
+          "x-opencode-project": Instance.project.id,
+          "x-opencode-session": `ses_${crypto.randomUUID().replace(/-/g, "")}`,
+          "x-opencode-request": id,
+          "x-opencode-client": Flag.OPENCODE_CLIENT,
+          "User-Agent": `opencode/${InstallationVersion}`,
+        } : undefined
         genResult = await generateText({
           model: language as any,
           system,
@@ -517,6 +562,7 @@ export const V1Routes = lazy(() =>
           toolChoice: sdkTools ? toolChoice : undefined,
           abortSignal: c.req.raw.signal,
           maxRetries: 0,
+          headers: opencodeHeadersNonStream,
         })
       } catch (err) {
         log.error(`← MODEL ${modelStr} ERROR`, { error: String(err), ms: Date.now() - t0 })
@@ -660,6 +706,16 @@ export const V1Routes = lazy(() =>
       const msgId = `msg_${crypto.randomUUID().replace(/-/g, "")}`
 
       if (stream) {
+        const llmAbort = new AbortController()
+        const onReqAbort = () => llmAbort.abort()
+        c.req.raw.signal.addEventListener("abort", onReqAbort)
+        const opencodeHeaders = parsed.providerID.startsWith("opencode") ? {
+          "x-opencode-project": Instance.project.id,
+          "x-opencode-session": `ses_${crypto.randomUUID().replace(/-/g, "")}`,
+          "x-opencode-request": msgId,
+          "x-opencode-client": Flag.OPENCODE_CLIENT,
+          "User-Agent": `opencode/${InstallationVersion}`,
+        } : undefined
         const result = streamText({
           model: language as any,
           messages: modelMessages,
@@ -668,87 +724,98 @@ export const V1Routes = lazy(() =>
           topP: top_p,
           tools: sdkTools,
           toolChoice: sdkTools ? toolChoice : undefined,
-          abortSignal: c.req.raw.signal,
+          abortSignal: llmAbort.signal,
           maxRetries: 0,
+          headers: opencodeHeaders,
         })
 
         return streamSSE(c, async (s) => {
           try {
-          // message_start
-          await s.writeSSE({
-            event: "message_start",
-            data: JSON.stringify({
-              type: "message_start",
-              message: { id: msgId, type: "message", role: "assistant", content: [], model: modelStr,
-                stop_reason: null, stop_sequence: null, usage: { input_tokens: 0, output_tokens: 1 } },
-            }),
-          })
-          await s.writeSSE({ event: "ping", data: JSON.stringify({ type: "ping" }) })
+            // message_start
+            await s.writeSSE({
+              event: "message_start",
+              data: JSON.stringify({
+                type: "message_start",
+                message: { id: msgId, type: "message", role: "assistant", content: [], model: modelStr,
+                  stop_reason: null, stop_sequence: null, usage: { input_tokens: 0, output_tokens: 1 } },
+              }),
+            })
+            await s.write(": ping\n\n")
 
-          let blockIndex = -1
-          let textBlockOpen = false
+            let blockIndex = -1
+            let textBlockOpen = false
 
-          for await (const event of result.fullStream) {
-            if (event.type === "text-delta") {
-              if (!textBlockOpen) {
+            for await (const event of result.fullStream) {
+              if (event.type === "text-delta") {
+                if (!textBlockOpen) {
+                  blockIndex++
+                  await s.writeSSE({
+                    event: "content_block_start",
+                    data: JSON.stringify({ type: "content_block_start", index: blockIndex, content_block: { type: "text", text: "" } }),
+                  })
+                  textBlockOpen = true
+                }
+                await s.writeSSE({
+                  event: "content_block_delta",
+                  data: JSON.stringify({ type: "content_block_delta", index: blockIndex,
+                    delta: { type: "text_delta", text: event.text } }),
+                })
+              } else if (event.type === "tool-call") {
+                if (textBlockOpen) {
+                  await s.writeSSE({ event: "content_block_stop",
+                    data: JSON.stringify({ type: "content_block_stop", index: blockIndex }) })
+                  textBlockOpen = false
+                }
                 blockIndex++
                 await s.writeSSE({
                   event: "content_block_start",
-                  data: JSON.stringify({ type: "content_block_start", index: blockIndex, content_block: { type: "text", text: "" } }),
+                  data: JSON.stringify({ type: "content_block_start", index: blockIndex,
+                    content_block: { type: "tool_use", id: event.toolCallId, name: event.toolName, input: {} } }),
                 })
-                textBlockOpen = true
-              }
-              await s.writeSSE({
-                event: "content_block_delta",
-                data: JSON.stringify({ type: "content_block_delta", index: blockIndex,
-                  delta: { type: "text_delta", text: event.text } }),
-              })
-            } else if (event.type === "tool-call") {
-              if (textBlockOpen) {
+                await s.writeSSE({
+                  event: "content_block_delta",
+                  data: JSON.stringify({ type: "content_block_delta", index: blockIndex,
+                    delta: { type: "input_json_delta", partial_json: JSON.stringify(event.input) } }),
+                })
                 await s.writeSSE({ event: "content_block_stop",
                   data: JSON.stringify({ type: "content_block_stop", index: blockIndex }) })
-                textBlockOpen = false
+                log.info(`← TOOL_CALL ${modelStr}`, { tool: event.toolName })
+              } else if (event.type === "error") {
+                log.error(`← MODEL ${modelStr} STREAM ERROR`, { error: String((event as any).error), ms: Date.now() - t0 })
+                await s.writeSSE({
+                  event: "error",
+                  data: JSON.stringify({ type: "error", error: { type: "api_error", message: String((event as any).error) } }),
+                })
+              } else if (event.type === "finish-step") {
+                if (textBlockOpen) {
+                  await s.writeSSE({ event: "content_block_stop",
+                    data: JSON.stringify({ type: "content_block_stop", index: blockIndex }) })
+                }
+                const stopReason =
+                  event.finishReason === "stop" ? "end_turn"
+                  : event.finishReason === "length" ? "max_tokens"
+                  : event.finishReason === "tool-calls" ? "tool_use"
+                  : "end_turn"
+                await s.writeSSE({
+                  event: "message_delta",
+                  data: JSON.stringify({ type: "message_delta",
+                    delta: { stop_reason: stopReason, stop_sequence: null },
+                    usage: { output_tokens: event.usage?.outputTokens ?? 0 } }),
+                })
+                log.info(`← MODEL ${modelStr}`, { stop: stopReason, out: event.usage?.outputTokens ?? 0, ms: Date.now() - t0 })
+                await s.writeSSE({ event: "message_stop", data: JSON.stringify({ type: "message_stop" }) })
               }
-              blockIndex++
-              await s.writeSSE({
-                event: "content_block_start",
-                data: JSON.stringify({ type: "content_block_start", index: blockIndex,
-                  content_block: { type: "tool_use", id: event.toolCallId, name: event.toolName, input: {} } }),
-              })
-              await s.writeSSE({
-                event: "content_block_delta",
-                data: JSON.stringify({ type: "content_block_delta", index: blockIndex,
-                  delta: { type: "input_json_delta", partial_json: JSON.stringify(event.input) } }),
-              })
-              await s.writeSSE({ event: "content_block_stop",
-                data: JSON.stringify({ type: "content_block_stop", index: blockIndex }) })
-              log.info(`← TOOL_CALL ${modelStr}`, { tool: event.toolName })
-            } else if (event.type === "finish-step") {
-              if (textBlockOpen) {
-                await s.writeSSE({ event: "content_block_stop",
-                  data: JSON.stringify({ type: "content_block_stop", index: blockIndex }) })
-              }
-              const stopReason =
-                event.finishReason === "stop" ? "end_turn"
-                : event.finishReason === "length" ? "max_tokens"
-                : event.finishReason === "tool-calls" ? "tool_use"
-                : "end_turn"
-              await s.writeSSE({
-                event: "message_delta",
-                data: JSON.stringify({ type: "message_delta",
-                  delta: { stop_reason: stopReason, stop_sequence: null },
-                  usage: { output_tokens: event.usage?.outputTokens ?? 0 } }),
-              })
-              log.info(`← MODEL ${modelStr}`, { stop: stopReason, out: event.usage?.outputTokens ?? 0, ms: Date.now() - t0 })
-              await s.writeSSE({ event: "message_stop", data: JSON.stringify({ type: "message_stop" }) })
             }
-          }
           } catch (err) {
             log.error(`← MODEL ${modelStr} STREAM ERROR`, { error: String(err), ms: Date.now() - t0 })
-            await s.writeSSE({
-              event: "error",
-              data: JSON.stringify({ type: "error", error: { type: "api_error", message: String(err) } }),
-            })
+            try {
+              await s.writeSSE({
+                event: "error",
+                data: JSON.stringify({ type: "error", error: { type: "api_error", message: String(err) } }),
+              })
+            } catch { /* stream already closed */ }
+          } finally {
+            c.req.raw.signal.removeEventListener("abort", onReqAbort)
           }
         })
       }
@@ -756,6 +823,13 @@ export const V1Routes = lazy(() =>
       // Non-streaming
       let genResult: Awaited<ReturnType<typeof generateText>>
       try {
+        const opencodeHeaders = parsed.providerID.startsWith("opencode") ? {
+          "x-opencode-project": Instance.project.id,
+          "x-opencode-session": `ses_${crypto.randomUUID().replace(/-/g, "")}`,
+          "x-opencode-request": msgId,
+          "x-opencode-client": Flag.OPENCODE_CLIENT,
+          "User-Agent": `opencode/${InstallationVersion}`,
+        } : undefined
         genResult = await generateText({
           model: language as any,
           messages: modelMessages,
@@ -766,6 +840,7 @@ export const V1Routes = lazy(() =>
           toolChoice: sdkTools ? toolChoice : undefined,
           abortSignal: c.req.raw.signal,
           maxRetries: 0,
+          headers: opencodeHeaders,
         })
       } catch (err) {
         log.error(`← MODEL ${modelStr} ERROR`, { error: String(err), ms: Date.now() - t0 })
