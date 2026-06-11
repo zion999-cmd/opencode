@@ -924,27 +924,33 @@ const _v1App = V1Routes()
 export const v1Middleware: HttpMiddleware.HttpMiddleware = (effect) =>
   Effect.gen(function* () {
     const request = yield* HttpServerRequest.HttpServerRequest
-    const url = new URL(request.url)
+    const url = new URL(request.url, "http://localhost")
     if (!url.pathname.startsWith("/v1/")) {
       return yield* effect
     }
-    const source = request.source as Request
-    const webResponse = yield* Effect.promise(async () =>
-      _v1App.fetch(
-        new Request(source.url, {
-          method: source.method,
-          headers: source.headers,
-          body: source.method !== "GET" && source.method !== "HEAD" ? source.body : undefined,
-        }),
-      ),
-    )
-    const body = yield* Effect.promise(() => webResponse.arrayBuffer())
-    const headers: Record<string, string> = {}
-    webResponse.headers.forEach((v, k) => { headers[k] = v })
-    return HttpServerResponse.uint8Array(new Uint8Array(body), {
+    // If request.source is a web Request, use it directly; otherwise build one
+    const source = request.source
+    const webRequest: Request =
+      source instanceof Request
+        ? new Request(source)
+        : new Request(request.url, {
+            method: request.method,
+            headers: (() => {
+              const h = new Headers()
+              for (const [k, v] of Object.entries(request.headers)) {
+                if (v != null) h.set(k, String(v))
+              }
+              return h
+            })(),
+          })
+    const webResponse = yield* Effect.promise(async () => _v1App.fetch(webRequest))
+    const resBody = yield* Effect.promise(() => webResponse.arrayBuffer())
+    const resHeaders: Record<string, string> = {}
+    webResponse.headers.forEach((v, k) => { resHeaders[k] = v })
+    return HttpServerResponse.uint8Array(new Uint8Array(resBody), {
       status: webResponse.status,
       statusText: webResponse.statusText,
-      headers,
+      headers: resHeaders,
     })
   })
 
