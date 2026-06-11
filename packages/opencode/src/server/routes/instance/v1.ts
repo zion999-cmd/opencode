@@ -1,15 +1,12 @@
 import { Hono } from "hono"
 import { streamSSE } from "hono/streaming"
 import { streamText, generateText, tool, jsonSchema, type ModelMessage } from "ai"
-import { Effect, Fiber } from "effect"
-import * as Context from "effect/Context"
+import { Effect, ManagedRuntime, Layer } from "effect"
 import { Provider } from "@/provider/provider"
 import { ProviderV2 } from "@opencode-ai/core/provider"
 import { ModelV2 } from "@opencode-ai/core/model"
 import { HttpMiddleware, HttpServerRequest, HttpServerResponse } from "effect/unstable/http"
-import { AppRuntime } from "@/effect/app-runtime"
-import { setFallbackRefs } from "@/effect/run-service"
-import { InstanceRef } from "@/effect/instance-ref"
+import { memoMap } from "@opencode-ai/core/effect/memo-map"
 import { lazy } from "@/util/lazy"
 import { InstallationVersion } from "@opencode-ai/core/installation/version"
 
@@ -18,6 +15,9 @@ const log = {
   warn: (...args: any[]) => console.warn("[server.v1]", ...args),
   error: (...args: any[]) => console.error("[server.v1]", ...args),
 }
+
+/** Minimal runtime for v1 routes — only needs Provider, not InstanceRef */
+const v1Runtime = ManagedRuntime.make(Provider.defaultLayer, { memoMap })
 
 /**
  * OpenAI-compatible v1 API routes that proxy through OpenCode's provider infrastructure.
@@ -327,7 +327,7 @@ export const V1Routes = lazy(() =>
   new Hono()
     .get("/models", async (c) => {
       log.info("GET /models")
-      const data = await AppRuntime.runPromise(
+      const data = await v1Runtime.runPromise(
         Effect.gen(function* () {
           const svc = yield* Provider.Service
           const providers = yield* svc.list()
@@ -394,7 +394,7 @@ export const V1Routes = lazy(() =>
         )
       }
 
-      const language = await AppRuntime.runPromise(
+      const language = await v1Runtime.runPromise(
         Effect.gen(function* () {
           const svc = yield* Provider.Service
           const m = yield* svc.getModel(ProviderV2.ID.make(parsed.providerID), ModelV2.ID.make(parsed.modelID))
@@ -699,7 +699,7 @@ export const V1Routes = lazy(() =>
         )
       }
 
-      const language = await AppRuntime.runPromise(
+      const language = await v1Runtime.runPromise(
         Effect.gen(function* () {
           const svc = yield* Provider.Service
           const m = yield* svc.getModel(ProviderV2.ID.make(parsed.providerID), ModelV2.ID.make(parsed.modelID))
@@ -950,7 +950,7 @@ export const v1Middleware: HttpMiddleware.HttpMiddleware = (effect) =>
                 return h
               })(),
             })
-      // Capture InstanceRef from current fiber so AppRuntime.runPromise can use it
+      // Capture InstanceRef from current fiber so v1Runtime.runPromise can use it
       try {
         const fiber = Fiber.getCurrent()
         console.log("[v1Middleware] fiber:", !!fiber)
