@@ -21,6 +21,22 @@ export function attachWith<A, E, R>(effect: Effect.Effect<A, E, R>, refs: Refs):
   )
 }
 
+/** Fallback refs used when Fiber.getCurrent() returns no InstanceRef (e.g. from AppRuntime in v1 middleware) */
+const _fallbackRefs: Refs = {}
+export function setFallbackRefs(refs: Refs): void {
+  Object.assign(_fallbackRefs, refs)
+}
+
+export function attach<A, E, R>(effect: Effect.Effect<A, E, R>): Effect.Effect<A, E, R> {
+  const workspace = WorkspaceContext.workspaceID
+  const fiber = Fiber.getCurrent()
+  let instance = fiber ? Context.getReferenceUnsafe(fiber.context, InstanceRef) : undefined
+  let wref = workspace ?? (fiber ? Context.getReferenceUnsafe(fiber.context, WorkspaceRef) : undefined)
+  if (!instance && _fallbackRefs.instance) instance = _fallbackRefs.instance
+  if (!wref && _fallbackRefs.workspace) wref = _fallbackRefs.workspace
+  return attachWith(effect, { instance, workspace: wref })
+}
+
 export function attach<A, E, R>(effect: Effect.Effect<A, E, R>): Effect.Effect<A, E, R> {
   const workspace = WorkspaceContext.workspaceID
   const fiber = Fiber.getCurrent()

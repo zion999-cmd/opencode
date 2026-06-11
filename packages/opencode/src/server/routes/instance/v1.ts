@@ -1,12 +1,15 @@
 import { Hono } from "hono"
 import { streamSSE } from "hono/streaming"
 import { streamText, generateText, tool, jsonSchema, type ModelMessage } from "ai"
+import { Effect, Fiber } from "effect"
+import * as Context from "effect/Context"
 import { Provider } from "@/provider/provider"
 import { ProviderV2 } from "@opencode-ai/core/provider"
 import { ModelV2 } from "@opencode-ai/core/model"
-import { Effect } from "effect"
 import { HttpMiddleware, HttpServerRequest, HttpServerResponse } from "effect/unstable/http"
 import { AppRuntime } from "@/effect/app-runtime"
+import { setFallbackRefs } from "@/effect/run-service"
+import { InstanceRef } from "@/effect/instance-ref"
 import { lazy } from "@/util/lazy"
 import { InstallationVersion } from "@opencode-ai/core/installation/version"
 
@@ -931,7 +934,6 @@ export const v1Middleware: HttpMiddleware.HttpMiddleware = (effect) =>
     // Strip the /v1 prefix since Hono routes are registered without it
     const v1Url = new URL(request.url, "http://localhost")
     v1Url.pathname = v1Url.pathname.replace(/^\/v1/, "") || "/"
-    // If request.source is a web Request, use it; otherwise build one
     const source = request.source
     const webRequest: Request =
       source instanceof Request
@@ -946,6 +948,12 @@ export const v1Middleware: HttpMiddleware.HttpMiddleware = (effect) =>
               return h
             })(),
           })
+    // Capture InstanceRef from current fiber so AppRuntime.runPromise can use it
+    const fiber = Fiber.getCurrent()
+    if (fiber) {
+      const ref = Context.getReferenceUnsafe(fiber.context, InstanceRef)
+      if (ref) setFallbackRefs({ instance: ref })
+    }
     const webResponse = yield* Effect.promise(async () => _v1App.fetch(webRequest))
     const resBody = yield* Effect.promise(() => webResponse.arrayBuffer())
     const resHeaders: Record<string, string> = {}
