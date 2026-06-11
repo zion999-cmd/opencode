@@ -5,6 +5,7 @@ import { Provider } from "@/provider/provider"
 import { ProviderV2 } from "@opencode-ai/core/provider"
 import { ModelV2 } from "@opencode-ai/core/model"
 import { Effect } from "effect"
+import { HttpMiddleware, HttpServerRequest, HttpServerResponse } from "effect/unstable/http"
 import { AppRuntime } from "@/effect/app-runtime"
 import { lazy } from "@/util/lazy"
 import { InstallationVersion } from "@opencode-ai/core/installation/version"
@@ -916,4 +917,34 @@ export const V1Routes = lazy(() =>
       })
     }),
 )
+
+/** Effect HTTP middleware that routes /v1/* requests to the Hono-based proxy */
+const _v1App = V1Routes()
+
+export const v1Middleware: HttpMiddleware.HttpMiddleware = (effect) =>
+  Effect.gen(function* () {
+    const request = yield* HttpServerRequest.HttpServerRequest
+    const url = new URL(request.url)
+    if (!url.pathname.startsWith("/v1/")) {
+      return yield* effect
+    }
+    const source = request.source as Request
+    const webResponse = yield* Effect.promise(async () =>
+      _v1App.fetch(
+        new Request(source.url, {
+          method: source.method,
+          headers: source.headers,
+          body: source.method !== "GET" && source.method !== "HEAD" ? source.body : undefined,
+        }),
+      ),
+    )
+    const body = yield* Effect.promise(() => webResponse.arrayBuffer())
+    const headers: Record<string, string> = {}
+    webResponse.headers.forEach((v, k) => { headers[k] = v })
+    return HttpServerResponse.uint8Array(new Uint8Array(body), {
+      status: webResponse.status,
+      statusText: webResponse.statusText,
+      headers,
+    })
+  })
 
