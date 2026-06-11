@@ -946,8 +946,8 @@ export const v1Middleware: HttpMiddleware.HttpMiddleware = (effect) =>
     // Strip the /v1 prefix since Hono routes are registered without it
     const v1Url = new URL(request.url, "http://localhost")
     v1Url.pathname = v1Url.pathname.replace(/^\/v1/, "") || "/"
+    // Read body from IncomingMessage (Node.js HTTP request)
     const source = request.source
-    // Build request headers
     const h = new Headers()
     for (const [k, v] of Object.entries(request.headers)) {
       if (v != null) h.set(k, String(v))
