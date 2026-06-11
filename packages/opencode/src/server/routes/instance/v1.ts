@@ -981,7 +981,10 @@ export const v1Middleware: HttpMiddleware.HttpMiddleware = (effect) =>
     webResponse.headers.forEach((v, k) => { resHeaders[k] = v })
     const isStreaming = resHeaders["content-type"]?.includes("text/event-stream")
     if (isStreaming && webResponse.body) {
-      // For SSE streaming, read chunks and write them as they arrive
+      // For SSE streaming, read chunks and send as stream
+      // Delete content-length to avoid conflict with Transfer-Encoding: chunked
+      delete resHeaders["content-length"]
+      delete resHeaders["transfer-encoding"]
       const reader = webResponse.body.getReader()
       const chunks: Uint8Array[] = []
       while (true) {
@@ -995,7 +998,6 @@ export const v1Middleware: HttpMiddleware.HttpMiddleware = (effect) =>
       for (const c of chunks) { merged.set(c, offset); offset += c.length }
       return HttpServerResponse.uint8Array(merged, {
         status: webResponse.status,
-        statusText: webResponse.statusText,
         headers: resHeaders,
       })
     }
