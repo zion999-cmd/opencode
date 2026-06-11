@@ -977,9 +977,32 @@ export const v1Middleware: HttpMiddleware.HttpMiddleware = (effect) =>
       body: body || undefined,
     })
     const webResponse = yield* Effect.promise(async () => _v1App.fetch(webRequest))
-    const resBody = yield* Effect.promise(() => webResponse.arrayBuffer())
     const resHeaders: Record<string, string> = {}
     webResponse.headers.forEach((v, k) => { resHeaders[k] = v })
+    // For streaming responses, stream the body directly
+    if (webResponse.body && resHeaders["content-type"]?.includes("text/event-stream")) {
+      const { Stream } = yield* Effect.promise(() => import("effect"))
+      const reader = webResponse.body.getReader()
+      const effectStream = Stream.asyncPush<Uint8Array, unknown>((emit) =>
+        Effect.gen(function* () {
+          while (true) {
+            const { done, value } = yield* Effect.promise(() => reader.read())
+            if (done) {
+              emit.end()
+              break
+            }
+            emit.single(value)
+          }
+        }),
+      )
+      return HttpServerResponse.stream(effectStream as any, {
+        status: webResponse.status,
+        statusText: webResponse.statusText,
+        headers: resHeaders,
+      })
+    }
+    // Non-streaming: buffer and send
+    const resBody = yield* Effect.promise(() => webResponse.arrayBuffer())
     return HttpServerResponse.uint8Array(new Uint8Array(resBody), {
       status: webResponse.status,
       statusText: webResponse.statusText,
