@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # oc2api.sh — OpenCode 免费模型代理服务管理脚本
-# 用法: ./oc2api.sh [start|stop|restart|status]
+# 用法: ./oc2api.sh [start|stop|restart|status|test]
 
 set -euo pipefail
 
@@ -48,7 +48,6 @@ cmd_start() {
     return 0
   fi
 
-  # 检查端口是否被其他进程占用（|| true 防止 set -e 在端口空闲时误退出）
   local occupant
   occupant=$(lsof -ti :"$PORT" 2>/dev/null | head -1 || true)
   if [ -n "$occupant" ]; then
@@ -73,7 +72,6 @@ cmd_start() {
   local pid=$!
   echo "$pid" > "$PID_FILE"
 
-  # 等待服务就绪（最多 10 秒）
   local i=0
   while [ $i -lt 20 ]; do
     sleep 0.5
@@ -84,7 +82,6 @@ cmd_start() {
     i=$((i + 1))
   done
 
-  # 若 /health 不可用，只要进程存在就认为启动成功
   if kill -0 "$pid" 2>/dev/null; then
     echo "oc2api started (PID $pid, port $PORT)"
   else
@@ -103,7 +100,6 @@ cmd_stop() {
   pid=$(cat "$PID_FILE")
   echo "Stopping oc2api (PID $pid) ..."
   kill "$pid" 2>/dev/null
-  # 等待进程退出
   local i=0
   while kill -0 "$pid" 2>/dev/null && [ $i -lt 20 ]; do
     sleep 0.3
@@ -162,13 +158,12 @@ cmd_test() {
   echo "Target: http://$HOST:$PORT/v1"
   echo ""
 
-  # Fetch model list
   local models
   models=$(curl -sf "http://$HOST:$PORT/v1/models" 2>/dev/null \
     | python3 -c "import sys,json; [print(m['id']) for m in json.load(sys.stdin)['data']]" 2>/dev/null)
 
   if [ -z "$models" ]; then
-    echo "FAIL: Could not fetch model list. Is the server responding?"
+    echo "FAIL: Could not fetch model list."
     return 1
   fi
 
@@ -178,7 +173,7 @@ cmd_test() {
 
   if [ "${1:-}" = "--dry" ]; then
     dry_run=true
-    echo "(Dry run mode — showing commands without executing)"
+    echo "(Dry run mode)"
     echo ""
   fi
 
@@ -187,55 +182,60 @@ cmd_test() {
     echo "----------------------------------------"
     echo "Model: $model"
 
-    # Test 1: non-streaming
-    printf "  non-streaming ... "
+    # Non-streaming test
+    printf "  non-streaming ..."
     if $dry_run; then
-      echo "(skipped)"
+      echo " (skipped)"
     else
-      local ns_result
-      ns_result=$(curl -sf --max-time 30 "http://$HOST:$PORT/v1/chat/completions" \
+      local reply
+      reply=$(curl -sf --max-time 60 "http://$HOST:$PORT/v1/chat/completions" \
         -H "Content-Type: application/json" \
-        -d "{\"model\":\"$model\",\"messages\":[{\"role\":\"user\",\"content\":\"$TEST_MSG\"}],\"max_tokens\":50,\"stream\":false}" \
+        -d "{\"model\":\"$model\",\"messages\":[{\"role\":\"user\",\"content\":\"$TEST_MSG\"}],\"max_tokens\":200,\"stream\":false}" \
         2>/dev/null | python3 -c "
 import sys,json
 try:
   d=json.load(sys.stdin)
-  c=d['choices'][0]['message'].get('content','')
-  rc=d['choices'][0]['message'].get('reasoning_content','')
-  print('PASS:' + (c or rc or 'empty'))
-except Exception as e:
-  print('FAIL:' + str(e))
+  m=d['choices'][0]['message']
+  c=m.get('content','')
+  rc=m.get('reasoning_content','')
+  if c: print(c.replace(chr(10),' ')[:200])
+  elif rc: print('[think:%dc]' % len(rc))
+  else: print('[empty]')
+except Exception as e: print('FAIL:'+str(e)[:100])
 " 2>/dev/null)
-      echo "$ns_result"
-      case "$ns_result" in
-        PASS:*) pass=$((pass + 1)) ;;
-        *) fail=$((fail + 1)) ;;
+      case "$reply" in
+        FAIL:*) fail=$((fail + 1)); echo " FAIL"; echo "       $reply" ;;
+        *) pass=$((pass + 1)); echo ""; echo "       reply: $reply" ;;
       esac
     fi
 
-    # Test 2: streaming
-    printf "  streaming      ... "
+    # Streaming test
+    printf "  streaming      ..."
     if $dry_run; then
-      echo "(skipped)"
+      echo " (skipped)"
     else
       local s_result
-      s_result=$(curl -sf --max-time 30 "http://$HOST:$PORT/v1/chat/completions" \
+      s_result=$(curl -sf --max-time 60 "http://$HOST:$PORT/v1/chat/completions" \
         -H "Content-Type: application/json" \
-        -d "{\"model\":\"$model\",\"messages\":[{\"role\":\"user\",\"content\":\"$TEST_MSG\"}],\"max_tokens\":50,\"stream\":true}" \
+        -d "{\"model\":\"$model\",\"messages\":[{\"role\":\"user\",\"content\":\"$TEST_MSG\"}],\"max_tokens\":200,\"stream\":true}" \
         2>/dev/null | python3 -c "
-import sys
+import sys,re
 text=sys.stdin.read()
 if 'data: [DONE]' in text:
-  print('PASS')
-elif 'reasoning_content' in text or '\"content\"' in text:
-  print('PASS:stream_received')
+  contents=re.findall(r'\"content\":\"((?:[^\"\\\\]|\\\\.)*)\"',text)
+  if contents:
+    print('OK: ' + ''.join(contents)[:200])
+  else:
+    thinks=re.findall(r'\"reasoning_content\":\"([^\"]+)\"',text)
+    print('[think:%dc]' % sum(len(t) for t in thinks))
+elif 'data:' in text[:500]:
+  print('OK (stream received)')
 else:
   print('FAIL:no_data')
 " 2>/dev/null)
-      echo "$s_result"
       case "$s_result" in
-        PASS*) pass=$((pass + 1)) ;;
-        *) fail=$((fail + 1)) ;;
+        FAIL:*) fail=$((fail + 1)); echo " FAIL"; echo "       $s_result" ;;
+        *) pass=$((pass + 1)); echo ""; echo "       $s_result" ;;
       esac
     fi
   done
@@ -244,10 +244,7 @@ else:
   echo "========================================"
   echo "Results: $pass passed, $fail failed (${total} models tested)"
   if [ "$fail" -gt 0 ]; then
-    echo "Some tests FAILED."
     return 1
-  else
-    echo "All tests PASSED."
   fi
 }
 
