@@ -979,23 +979,21 @@ export const v1Middleware: HttpMiddleware.HttpMiddleware = (effect) =>
     const webResponse = yield* Effect.promise(async () => _v1App.fetch(webRequest))
     const resHeaders: Record<string, string> = {}
     webResponse.headers.forEach((v, k) => { resHeaders[k] = v })
-    // For streaming responses, stream the body directly
-    if (webResponse.body && resHeaders["content-type"]?.includes("text/event-stream")) {
-      const { Stream } = yield* Effect.promise(() => import("effect"))
+    const isStreaming = resHeaders["content-type"]?.includes("text/event-stream")
+    if (isStreaming && webResponse.body) {
+      // For SSE streaming, read chunks and write them as they arrive
       const reader = webResponse.body.getReader()
-      const effectStream = Stream.asyncPush<Uint8Array, unknown>((emit) =>
-        Effect.gen(function* () {
-          while (true) {
-            const { done, value } = yield* Effect.promise(() => reader.read())
-            if (done) {
-              emit.end()
-              break
-            }
-            emit.single(value)
-          }
-        }),
-      )
-      return HttpServerResponse.stream(effectStream as any, {
+      const chunks: Uint8Array[] = []
+      while (true) {
+        const { done, value } = yield* Effect.promise(() => reader.read())
+        if (done) break
+        if (value) chunks.push(value)
+      }
+      const total = chunks.reduce((s, c) => s + c.length, 0)
+      const merged = new Uint8Array(total)
+      let offset = 0
+      for (const c of chunks) { merged.set(c, offset); offset += c.length }
+      return HttpServerResponse.uint8Array(merged, {
         status: webResponse.status,
         statusText: webResponse.statusText,
         headers: resHeaders,
