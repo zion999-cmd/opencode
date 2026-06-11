@@ -947,19 +947,28 @@ export const v1Middleware: HttpMiddleware.HttpMiddleware = (effect) =>
     const v1Url = new URL(request.url, "http://localhost")
     v1Url.pathname = v1Url.pathname.replace(/^\/v1/, "") || "/"
     const source = request.source
-    const webRequest: Request =
-      source instanceof Request
-        ? new Request(v1Url.toString(), source)
-        : new Request(v1Url.toString(), {
-            method: request.method,
-            headers: (() => {
-              const h = new Headers()
-              for (const [k, v] of Object.entries(request.headers)) {
-                if (v != null) h.set(k, String(v))
-              }
-              return h
-            })(),
-          })
+    if (source instanceof Request) {
+      // Clone to avoid body-already-consumed issues
+      const webRequest = new Request(v1Url.toString(), source.clone() as RequestInit)
+      const webResponse = yield* Effect.promise(async () => _v1App.fetch(webRequest))
+      const resBody = yield* Effect.promise(() => webResponse.arrayBuffer())
+      const resHeaders: Record<string, string> = {}
+      webResponse.headers.forEach((v, k) => { resHeaders[k] = v })
+      return HttpServerResponse.uint8Array(new Uint8Array(resBody), {
+        status: webResponse.status,
+        statusText: webResponse.statusText,
+        headers: resHeaders,
+      })
+    }
+    // Build request from HttpServerRequest properties
+    const h = new Headers()
+    for (const [k, v] of Object.entries(request.headers)) {
+      if (v != null) h.set(k, String(v))
+    }
+    const webRequest = new Request(v1Url.toString(), {
+      method: request.method,
+      headers: h,
+    })
     const webResponse = yield* Effect.promise(async () => _v1App.fetch(webRequest))
     const resBody = yield* Effect.promise(() => webResponse.arrayBuffer())
     const resHeaders: Record<string, string> = {}
