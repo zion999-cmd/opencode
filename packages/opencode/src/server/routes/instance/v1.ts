@@ -1,17 +1,19 @@
 import { Hono } from "hono"
 import { streamSSE } from "hono/streaming"
 import { streamText, generateText, tool, jsonSchema, type ModelMessage } from "ai"
-import { Provider } from "@/provider"
-import { ProviderID, ModelID } from "@/provider/schema"
+import { Provider } from "@/provider/provider"
+import { ProviderV2 } from "@opencode-ai/core/provider"
+import { ModelV2 } from "@opencode-ai/core/model"
 import { Effect } from "effect"
 import { AppRuntime } from "@/effect/app-runtime"
 import { lazy } from "@/util/lazy"
-import { Log } from "@/util"
-import { Instance } from "@/project/instance"
-import { Flag } from "@/flag/flag"
-import { InstallationVersion } from "@/installation/version"
+import { InstallationVersion } from "@opencode-ai/core/installation/version"
 
-const log = Log.create({ service: "server.v1" })
+const log = {
+  info: (...args: any[]) => console.log("[server.v1]", ...args),
+  warn: (...args: any[]) => console.warn("[server.v1]", ...args),
+  error: (...args: any[]) => console.error("[server.v1]", ...args),
+}
 
 /**
  * OpenAI-compatible v1 API routes that proxy through OpenCode's provider infrastructure.
@@ -391,7 +393,7 @@ export const V1Routes = lazy(() =>
       const language = await AppRuntime.runPromise(
         Effect.gen(function* () {
           const svc = yield* Provider.Service
-          const m = yield* svc.getModel(ProviderID.make(parsed.providerID), ModelID.make(parsed.modelID))
+          const m = yield* svc.getModel(ProviderV2.ID.make(parsed.providerID), ModelV2.ID.make(parsed.modelID))
           return yield* svc.getLanguage(m)
         }),
       ).catch((err) => {
@@ -427,10 +429,10 @@ export const V1Routes = lazy(() =>
         const onReqAbort = () => llmAbort.abort()
         c.req.raw.signal.addEventListener("abort", onReqAbort)
         const opencodeHeaders = parsed.providerID.startsWith("opencode") ? {
-          "x-opencode-project": Instance.project.id,
+          "x-opencode-project": (process.env.OPENCODE_PROJECT_ID ?? "unknown"),
           "x-opencode-session": `ses_${crypto.randomUUID().replace(/-/g, "")}`,
           "x-opencode-request": id,
-          "x-opencode-client": Flag.OPENCODE_CLIENT,
+          "x-opencode-client": (process.env.OPENCODE_CLIENT ?? "cli"),
           "User-Agent": `opencode/${InstallationVersion}`,
         } : undefined
         const result = streamText({
@@ -551,10 +553,10 @@ export const V1Routes = lazy(() =>
       let genResult: Awaited<ReturnType<typeof generateText>>
       try {
         const opencodeHeadersNonStream = parsed.providerID.startsWith("opencode") ? {
-          "x-opencode-project": Instance.project.id,
+          "x-opencode-project": (process.env.OPENCODE_PROJECT_ID ?? "unknown"),
           "x-opencode-session": `ses_${crypto.randomUUID().replace(/-/g, "")}`,
           "x-opencode-request": id,
-          "x-opencode-client": Flag.OPENCODE_CLIENT,
+          "x-opencode-client": (process.env.OPENCODE_CLIENT ?? "cli"),
           "User-Agent": `opencode/${InstallationVersion}`,
         } : undefined
         genResult = await generateText({
@@ -696,7 +698,7 @@ export const V1Routes = lazy(() =>
       const language = await AppRuntime.runPromise(
         Effect.gen(function* () {
           const svc = yield* Provider.Service
-          const m = yield* svc.getModel(ProviderID.make(parsed.providerID), ModelID.make(parsed.modelID))
+          const m = yield* svc.getModel(ProviderV2.ID.make(parsed.providerID), ModelV2.ID.make(parsed.modelID))
           return yield* svc.getLanguage(m)
         }),
       ).catch((err) => {
@@ -717,10 +719,10 @@ export const V1Routes = lazy(() =>
         const onReqAbort = () => llmAbort.abort()
         c.req.raw.signal.addEventListener("abort", onReqAbort)
         const opencodeHeaders = parsed.providerID.startsWith("opencode") ? {
-          "x-opencode-project": Instance.project.id,
+          "x-opencode-project": (process.env.OPENCODE_PROJECT_ID ?? "unknown"),
           "x-opencode-session": `ses_${crypto.randomUUID().replace(/-/g, "")}`,
           "x-opencode-request": msgId,
-          "x-opencode-client": Flag.OPENCODE_CLIENT,
+          "x-opencode-client": (process.env.OPENCODE_CLIENT ?? "cli"),
           "User-Agent": `opencode/${InstallationVersion}`,
         } : undefined
         const result = streamText({
@@ -850,10 +852,10 @@ export const V1Routes = lazy(() =>
       let genResult: Awaited<ReturnType<typeof generateText>>
       try {
         const opencodeHeaders = parsed.providerID.startsWith("opencode") ? {
-          "x-opencode-project": Instance.project.id,
+          "x-opencode-project": (process.env.OPENCODE_PROJECT_ID ?? "unknown"),
           "x-opencode-session": `ses_${crypto.randomUUID().replace(/-/g, "")}`,
           "x-opencode-request": msgId,
-          "x-opencode-client": Flag.OPENCODE_CLIENT,
+          "x-opencode-client": (process.env.OPENCODE_CLIENT ?? "cli"),
           "User-Agent": `opencode/${InstallationVersion}`,
         } : undefined
         genResult = await generateText({

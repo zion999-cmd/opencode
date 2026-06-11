@@ -10,6 +10,7 @@ import { HttpApiApp } from "./routes/instance/httpapi/server"
 import { disposeMiddleware } from "./routes/instance/httpapi/lifecycle"
 import { WebSocketTracker } from "./routes/instance/httpapi/websocket-tracker"
 import { PublicApi } from "./routes/instance/httpapi/public"
+import { V1Routes } from "./routes/instance/v1"
 import type { CorsOptions } from "./cors"
 import { lazy } from "@/util/lazy"
 
@@ -54,8 +55,15 @@ class ListenerServerService extends Context.Service<ListenerServerService, Liste
 
 export const Default = lazy(() => {
   const handler = HttpApiApp.webHandler().handler
+  const v1App = V1Routes()
   const app: ServerApp = {
-    fetch: (request: Request) => handler(request, HttpApiApp.context),
+    fetch: async (request: Request) => {
+      const url = new URL(request.url)
+      if (url.pathname.startsWith("/v1/")) {
+        return v1App.fetch(request)
+      }
+      return handler(request, HttpApiApp.context)
+    },
     request(input, init) {
       return app.fetch(input instanceof Request ? input : new Request(new URL(input, "http://localhost"), init))
     },

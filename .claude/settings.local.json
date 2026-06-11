@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)",
+      "Bash(git push *)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\" https://github.com --connect-timeout 10)",
+      "Bash(nslookup github.com)",
+      "Bash(npx tsc *)",
+      "Bash(git stash *)"
+    ]
+  }
+}
