@@ -947,28 +947,34 @@ export const v1Middleware: HttpMiddleware.HttpMiddleware = (effect) =>
     const v1Url = new URL(request.url, "http://localhost")
     v1Url.pathname = v1Url.pathname.replace(/^\/v1/, "") || "/"
     const source = request.source
-    console.log("[v1Middleware] source type:", source?.constructor?.name, "isRequest:", source instanceof Request)
-    if (source instanceof Request) {
-      // Clone to avoid body-already-consumed issues
-      const webRequest = new Request(v1Url.toString(), source.clone() as RequestInit)
-      const webResponse = yield* Effect.promise(async () => _v1App.fetch(webRequest))
-      const resBody = yield* Effect.promise(() => webResponse.arrayBuffer())
-      const resHeaders: Record<string, string> = {}
-      webResponse.headers.forEach((v, k) => { resHeaders[k] = v })
-      return HttpServerResponse.uint8Array(new Uint8Array(resBody), {
-        status: webResponse.status,
-        statusText: webResponse.statusText,
-        headers: resHeaders,
-      })
-    }
-    // Build request from HttpServerRequest properties
+    // Build request headers
     const h = new Headers()
     for (const [k, v] of Object.entries(request.headers)) {
       if (v != null) h.set(k, String(v))
     }
+    // Read body from IncomingMessage (Node.js HTTP request)
+    let body: string | undefined
+    if (request.method !== "GET" && request.method !== "HEAD") {
+      body = yield* Effect.promise(
+        () =>
+          new Promise<string>((resolve, reject) => {
+            if (source && typeof (source as any).on === "function") {
+              let data = ""
+              ;(source as any).on("data", (chunk: any) => {
+                data += typeof chunk === "string" ? chunk : chunk.toString("utf-8")
+              })
+              ;(source as any).on("end", () => resolve(data))
+              ;(source as any).on("error", reject)
+            } else {
+              resolve("")
+            }
+          }),
+      )
+    }
     const webRequest = new Request(v1Url.toString(), {
       method: request.method,
       headers: h,
+      body: body || undefined,
     })
     const webResponse = yield* Effect.promise(async () => _v1App.fetch(webRequest))
     const resBody = yield* Effect.promise(() => webResponse.arrayBuffer())
