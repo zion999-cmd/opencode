@@ -947,6 +947,7 @@ export const v1Middleware: HttpMiddleware.HttpMiddleware = (effect) =>
     const v1Url = new URL(request.url, "http://localhost")
     v1Url.pathname = v1Url.pathname.replace(/^\/v1/, "") || "/"
     const source = request.source
+    console.log("[v1Middleware] source type:", source?.constructor?.name, "isRequest:", source instanceof Request)
     if (source instanceof Request) {
       // Clone to avoid body-already-consumed issues
       const webRequest = new Request(v1Url.toString(), source.clone() as RequestInit)
