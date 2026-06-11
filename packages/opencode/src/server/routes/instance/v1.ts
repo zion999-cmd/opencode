@@ -928,12 +928,15 @@ export const v1Middleware: HttpMiddleware.HttpMiddleware = (effect) =>
     if (!url.pathname.startsWith("/v1/")) {
       return yield* effect
     }
-    // If request.source is a web Request, use it directly; otherwise build one
+    // Strip the /v1 prefix since Hono routes are registered without it
+    const v1Url = new URL(request.url, "http://localhost")
+    v1Url.pathname = v1Url.pathname.replace(/^\/v1/, "") || "/"
+    // If request.source is a web Request, use it; otherwise build one
     const source = request.source
     const webRequest: Request =
       source instanceof Request
-        ? new Request(source)
-        : new Request(request.url, {
+        ? new Request(v1Url.toString(), source)
+        : new Request(v1Url.toString(), {
             method: request.method,
             headers: (() => {
               const h = new Headers()

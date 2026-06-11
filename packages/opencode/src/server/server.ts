@@ -60,7 +60,10 @@ export const Default = lazy(() => {
     fetch: async (request: Request) => {
       const url = new URL(request.url)
       if (url.pathname.startsWith("/v1/")) {
-        return v1App.fetch(request)
+        // Strip /v1 prefix — Hono routes are registered without it
+        const v1Url = new URL(request.url)
+        v1Url.pathname = v1Url.pathname.replace(/^\/v1/, "") || "/"
+        return v1App.fetch(new Request(v1Url.toString(), request))
       }
       return handler(request, HttpApiApp.context)
     },
