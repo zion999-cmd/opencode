@@ -943,49 +943,31 @@ export const v1Middleware: HttpMiddleware.HttpMiddleware = (effect) =>
     if (!url.pathname.startsWith("/v1/")) {
       return yield* effect
     }
-    console.log("[v1Middleware] handling", url.pathname)
-    try {
-      // Strip the /v1 prefix since Hono routes are registered without it
-      const v1Url = new URL(request.url, "http://localhost")
-      v1Url.pathname = v1Url.pathname.replace(/^\/v1/, "") || "/"
-      const source = request.source
-      const webRequest: Request =
-        source instanceof Request
-          ? new Request(v1Url.toString(), source)
-          : new Request(v1Url.toString(), {
-              method: request.method,
-              headers: (() => {
-                const h = new Headers()
-                for (const [k, v] of Object.entries(request.headers)) {
-                  if (v != null) h.set(k, String(v))
-                }
-                return h
-              })(),
-            })
-      // Capture InstanceRef from current fiber so runV1 can use it
-      try {
-        const fiber = Fiber.getCurrent()
-        console.log("[v1Middleware] fiber:", !!fiber)
-        if (fiber) {
-          const ref = Context.getReferenceUnsafe(fiber.context, InstanceRef)
-          console.log("[v1Middleware] instanceRef:", !!ref, typeof ref, ref ? String(ref).slice(0, 50) : "null")
-          if (ref) setFallbackRefs({ instance: ref })
-        }
-      } catch (e) {
-        console.error("[v1Middleware] failed to get InstanceRef:", e)
-      }
-      const webResponse = yield* Effect.promise(async () => _v1App.fetch(webRequest))
-      const resBody = yield* Effect.promise(() => webResponse.arrayBuffer())
-      const resHeaders: Record<string, string> = {}
-      webResponse.headers.forEach((v, k) => { resHeaders[k] = v })
-      return HttpServerResponse.uint8Array(new Uint8Array(resBody), {
-        status: webResponse.status,
-        statusText: webResponse.statusText,
-        headers: resHeaders,
-      })
-    } catch (err) {
-      console.error("[v1Middleware] error:", String(err))
-      return yield* effect
-    }
+    // Strip the /v1 prefix since Hono routes are registered without it
+    const v1Url = new URL(request.url, "http://localhost")
+    v1Url.pathname = v1Url.pathname.replace(/^\/v1/, "") || "/"
+    const source = request.source
+    const webRequest: Request =
+      source instanceof Request
+        ? new Request(v1Url.toString(), source)
+        : new Request(v1Url.toString(), {
+            method: request.method,
+            headers: (() => {
+              const h = new Headers()
+              for (const [k, v] of Object.entries(request.headers)) {
+                if (v != null) h.set(k, String(v))
+              }
+              return h
+            })(),
+          })
+    const webResponse = yield* Effect.promise(async () => _v1App.fetch(webRequest))
+    const resBody = yield* Effect.promise(() => webResponse.arrayBuffer())
+    const resHeaders: Record<string, string> = {}
+    webResponse.headers.forEach((v, k) => { resHeaders[k] = v })
+    return HttpServerResponse.uint8Array(new Uint8Array(resBody), {
+      status: webResponse.status,
+      statusText: webResponse.statusText,
+      headers: resHeaders,
+    })
   })
 
