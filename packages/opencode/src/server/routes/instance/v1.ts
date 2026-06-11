@@ -23,10 +23,13 @@ const dummyInstance = {
   worktree: process.cwd(),
   project: { id: "v1-proxy" } as any,
 }
-const v1Layer = Provider.defaultLayer.pipe(
-  Layer.provide(Layer.succeed(InstanceRef as any, dummyInstance)),
-)
-const v1Runtime = ManagedRuntime.make(v1Layer, { memoMap })
+const _v1Runtime = ManagedRuntime.make(Provider.defaultLayer, { memoMap })
+
+function runV1<A, E, R>(effect: Effect.Effect<A, E, R>): Promise<A> {
+  return _v1Runtime.runPromise(
+    effect.pipe(Effect.provideService(InstanceRef as any, dummyInstance)),
+  )
+}
 
 /**
  * OpenAI-compatible v1 API routes that proxy through OpenCode's provider infrastructure.
@@ -336,7 +339,7 @@ export const V1Routes = lazy(() =>
   new Hono()
     .get("/models", async (c) => {
       log.info("GET /models")
-      const data = await v1Runtime.runPromise(
+      const data = await runV1(
         Effect.gen(function* () {
           const svc = yield* Provider.Service
           const providers = yield* svc.list()
@@ -403,7 +406,7 @@ export const V1Routes = lazy(() =>
         )
       }
 
-      const language = await v1Runtime.runPromise(
+      const language = await runV1(
         Effect.gen(function* () {
           const svc = yield* Provider.Service
           const m = yield* svc.getModel(ProviderV2.ID.make(parsed.providerID), ModelV2.ID.make(parsed.modelID))
@@ -708,7 +711,7 @@ export const V1Routes = lazy(() =>
         )
       }
 
-      const language = await v1Runtime.runPromise(
+      const language = await runV1(
         Effect.gen(function* () {
           const svc = yield* Provider.Service
           const m = yield* svc.getModel(ProviderV2.ID.make(parsed.providerID), ModelV2.ID.make(parsed.modelID))
@@ -959,7 +962,7 @@ export const v1Middleware: HttpMiddleware.HttpMiddleware = (effect) =>
                 return h
               })(),
             })
-      // Capture InstanceRef from current fiber so v1Runtime.runPromise can use it
+      // Capture InstanceRef from current fiber so runV1 can use it
       try {
         const fiber = Fiber.getCurrent()
         console.log("[v1Middleware] fiber:", !!fiber)

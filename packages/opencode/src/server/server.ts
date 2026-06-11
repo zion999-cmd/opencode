@@ -10,7 +10,7 @@ import { HttpApiApp } from "./routes/instance/httpapi/server"
 import { disposeMiddleware } from "./routes/instance/httpapi/lifecycle"
 import { WebSocketTracker } from "./routes/instance/httpapi/websocket-tracker"
 import { PublicApi } from "./routes/instance/httpapi/public"
-import { V1Routes } from "./routes/instance/v1"
+import { V1Routes, v1Middleware } from "./routes/instance/v1"
 import type { CorsOptions } from "./cors"
 import { lazy } from "@/util/lazy"
 
@@ -110,7 +110,7 @@ const listenEffect: (opts: ListenOptions) => Effect.Effect<EffectListener, unkno
 
 function listenerLayer(opts: ListenOptions, port: number) {
   return HttpRouter.serve(HttpApiApp.createRoutes(opts), {
-    middleware: disposeMiddleware,
+    middleware: (effect) => v1Middleware(disposeMiddleware(effect)),
     disableLogger: true,
     disableListenLog: true,
   }).pipe(
