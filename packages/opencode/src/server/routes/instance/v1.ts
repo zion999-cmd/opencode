@@ -931,6 +931,7 @@ export const v1Middleware: HttpMiddleware.HttpMiddleware = (effect) =>
     if (!url.pathname.startsWith("/v1/")) {
       return yield* effect
     }
+    console.log("[v1Middleware] handling", url.pathname)
     try {
       // Strip the /v1 prefix since Hono routes are registered without it
       const v1Url = new URL(request.url, "http://localhost")
@@ -952,11 +953,15 @@ export const v1Middleware: HttpMiddleware.HttpMiddleware = (effect) =>
       // Capture InstanceRef from current fiber so AppRuntime.runPromise can use it
       try {
         const fiber = Fiber.getCurrent()
+        console.log("[v1Middleware] fiber:", !!fiber)
         if (fiber) {
           const ref = Context.getReferenceUnsafe(fiber.context, InstanceRef)
+          console.log("[v1Middleware] instanceRef:", !!ref, typeof ref, ref ? String(ref).slice(0, 50) : "null")
           if (ref) setFallbackRefs({ instance: ref })
         }
-      } catch {}
+      } catch (e) {
+        console.error("[v1Middleware] failed to get InstanceRef:", e)
+      }
       const webResponse = yield* Effect.promise(async () => _v1App.fetch(webRequest))
       const resBody = yield* Effect.promise(() => webResponse.arrayBuffer())
       const resHeaders: Record<string, string> = {}
