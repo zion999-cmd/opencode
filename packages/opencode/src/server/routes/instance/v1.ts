@@ -9,6 +9,7 @@ import { HttpMiddleware, HttpServerRequest, HttpServerResponse } from "effect/un
 import { memoMap } from "@opencode-ai/core/effect/memo-map"
 import { lazy } from "@/util/lazy"
 import { InstallationVersion } from "@opencode-ai/core/installation/version"
+import { InstanceRef } from "@/effect/instance-ref"
 
 const log = {
   info: (...args: any[]) => console.log("[server.v1]", ...args),
@@ -16,8 +17,16 @@ const log = {
   error: (...args: any[]) => console.error("[server.v1]", ...args),
 }
 
-/** Minimal runtime for v1 routes — only needs Provider, not InstanceRef */
-const v1Runtime = ManagedRuntime.make(Provider.defaultLayer, { memoMap })
+/** Minimal runtime for v1 routes — provides Provider with a dummy InstanceRef */
+const dummyInstance = {
+  directory: process.cwd(),
+  worktree: process.cwd(),
+  project: { id: "v1-proxy" } as any,
+}
+const v1Layer = Provider.defaultLayer.pipe(
+  Layer.provide(Layer.succeed(InstanceRef as any, dummyInstance)),
+)
+const v1Runtime = ManagedRuntime.make(v1Layer, { memoMap })
 
 /**
  * OpenAI-compatible v1 API routes that proxy through OpenCode's provider infrastructure.
