@@ -87,6 +87,8 @@ void mock.module("@modelcontextprotocol/sdk/client/sse.js", () => ({
 // Mock the MCP SDK Client
 void mock.module("@modelcontextprotocol/sdk/client/index.js", () => ({
   Client: class MockClient {
+    setRequestHandler() {}
+
     async connect(transport: { start: () => Promise<void> }) {
       await transport.start()
     }
@@ -96,6 +98,8 @@ void mock.module("@modelcontextprotocol/sdk/client/index.js", () => ({
     getServerCapabilities() {
       return serverCapabilities
     }
+
+    getInstructions() {}
 
     async listTools() {
       listToolsCalls++
@@ -224,6 +228,30 @@ mcpTest.instance("state() returns existing state when one is saved", () =>
 )
 
 mcpTest.instance(
+  "auth status only reports credentials stored for the configured server URL",
+  () =>
+    Effect.gen(function* () {
+      const mcp = yield* MCP.Service
+      expect(transportCalls).toHaveLength(0)
+      yield* McpAuth.use.updateTokens("test-status-url", { accessToken: "old-token" }, "https://old.example.com/mcp")
+
+      expect(yield* mcp.getAuthStatus("test-status-url")).toBe("not_authenticated")
+
+      yield* McpAuth.use.updateTokens("test-status-url", { accessToken: "current-token" }, "https://example.com/mcp")
+      expect(yield* mcp.getAuthStatus("test-status-url")).toBe("authenticated")
+
+      yield* McpAuth.use.updateTokens(
+        "test-status-url",
+        { accessToken: "expired-token", expiresAt: 1 },
+        "https://example.com/mcp",
+      )
+      expect(yield* mcp.getAuthStatus("test-status-url")).toBe("expired")
+      expect(transportCalls).toHaveLength(0)
+    }),
+  { config: config("test-status-url") },
+)
+
+mcpTest.instance(
   "authenticate() stores a connected client when auth completes without redirect",
   () =>
     MCP.Service.use((mcp) =>
@@ -267,7 +295,7 @@ mcpTest.instance(
         const result = yield* mcp.authenticate("test-oauth-resources")
         expect(result.status).toBe("connected")
         expect(listToolsCalls).toBe(0)
-        expect(Object.keys(yield* mcp.resources())).toEqual(["test-oauth-resources:docs"])
+        expect(Object.keys(yield* mcp.resources())).toEqual(["test-oauth-resources:docs://readme"])
       }),
     ),
   { config: config("test-oauth-resources") },
