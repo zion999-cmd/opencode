@@ -24,10 +24,24 @@
   "workspaces": {
     "packages": [
       "packages/*",
-      "packages/console/*",
-      "packages/stats/*",
-      "packages/sdk/js",
-      "packages/slack"
+      "!packages/web",
+      "!packages/console/*",
+      "!packages/app",
+      "!packages/desktop",
+      "!packages/desktop-electron",
+      "!packages/storybook",
+      "!packages/stats/*",
+      "!packages/slack",
+      "!packages/enterprise",
+      "!packages/docs",
+      "!packages/containers",
+      "!packages/session-ui",
+      "!packages/sdk-next",
+      "!packages/httpapi-codegen",
+      "!packages/shared",
+      "!packages/identity",
+      "!packages/client",
+      "packages/sdk/js"
     ],
     "catalog": {
       "@effect/opentelemetry": "4.0.0-beta.83",
