@@ -32,3 +32,22 @@ UPCOMING_CHANGELOG.md
 logs/
 *.bun-build
 tsconfig.tsbuildinfo
+
+# Packages not needed by oc2api fork
+packages/web/
+packages/console/
+packages/app/
+packages/desktop/
+packages/desktop-electron/
+packages/storybook/
+packages/stats/
+packages/slack/
+packages/enterprise/
+packages/docs/
+packages/containers/
+packages/session-ui/
+packages/sdk-next/
+packages/httpapi-codegen/
+packages/shared/
+packages/identity/
+.github/
